@@ -1,12 +1,14 @@
 #!/bin/bash
 
-## Package manager installation command
-INSTALL_COMMAND="apt-get install -q=2 -y"
+## Package manager installation command with lock timeout
+INSTALL_COMMAND="apt-get -o DPkg::Lock::Timeout=60 install -q=2 -y"
 
 ## Check BLAS library in repos (Debian 12/Bookworm moved from ATLAS to OpenBLAS)
 BLAS_DEP="libopenblas-dev"
-if apt-cache show libatlas-base-dev >/dev/null 2>&1; then
-    BLAS_DEP="libatlas-base-dev"
+if apt-cache policy libopenblas-dev 2>/dev/null | grep -E 'Candidate:' | grep -q '(none)'; then
+    if apt-cache policy libatlas-base-dev 2>/dev/null | grep -E 'Candidate:' | grep -qv '(none)'; then
+        BLAS_DEP="libatlas-base-dev"
+    fi
 fi
 
 ## Python dependencies to be installed
@@ -17,7 +19,7 @@ PYTHON_DEPS=(numpy Beautifulsoup4 mutagen simplejson twython emoji \
 SYSTEM_DEPS=(python3-pip python3-dev curl faad flac gcc git lame mpg123 make \
              python3-numpy python3-setuptools unzip vorbis-tools \
              cython3 pianobar libjpeg-dev libtiff-dev libasound2-dev alsa-utils \
-             python-is-python3 $BLAS_DEP)
+             python-is-python3 ffmpeg $BLAS_DEP)
 
 # Add python3-alsaaudio if available in apt
 if apt-cache show python3-alsaaudio >/dev/null 2>&1; then
@@ -37,10 +39,5 @@ apt-get -y remove python-spidev 2>/dev/null || true
 if command -v raspi-config >/dev/null 2>&1; then
     raspi-config nonint do_gldriver G3 2>/dev/null || true
 fi
- 
-# The ffmpeg library changed starting with Debian 8
-# Try to install ffmpeg first, then libav-tools
-echo -ne "\e[0;31mNOTE:\e[m " >&2
-echo "Installing ffmpeg..."
-$INSTALL_COMMAND ffmpeg
 
+return 0 2>/dev/null || exit 0

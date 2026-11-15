@@ -3,18 +3,29 @@
 # Kali Linux installation script for LightShow Pi on Raspberry Pi
 #
 
-## Package manager installation command
-INSTALL_COMMAND="apt-get install -q=2 -y"
+## Package manager installation command with lock timeout
+INSTALL_COMMAND="apt-get -o DPkg::Lock::Timeout=60 install -q=2 -y"
 
-## Update package repository index
+## Handle deprecated buster repository that causes SHA1 GPG rejection in modern Kali
+for rlist in /etc/apt/sources.list.d/*.list; do
+    if [ -f "$rlist" ] && grep -q "archive.raspberrypi.org/debian buster" "$rlist" 2>/dev/null; then
+        echo -ne "\e[1;33mNOTE:\e[m " >&2
+        echo "Disabling deprecated archive.raspberrypi.org buster repository in $rlist..."
+        sed -i 's/^deb http:\/\/archive.raspberrypi.org\/debian buster/# deb http:\/\/archive.raspberrypi.org\/debian buster/' "$rlist" 2>/dev/null || true
+    fi
+done
+
+## Update package repository index (with timeout and tolerance for warnings)
 echo -ne "\e[1;34mlightshowpi \e[m" >&2
 echo "Updating apt package list..."
-apt-get update -q=2
+apt-get -o DPkg::Lock::Timeout=60 update -q=2 || true
 
-## Check BLAS library in Kali/Debian repos
+## Check BLAS library in Kali/Debian repos (prefer OpenBLAS on modern systems)
 BLAS_DEP="libopenblas-dev"
-if apt-cache show libatlas-base-dev >/dev/null 2>&1; then
-    BLAS_DEP="libatlas-base-dev"
+if apt-cache policy libopenblas-dev 2>/dev/null | grep -E 'Candidate:' | grep -q '(none)'; then
+    if apt-cache policy libatlas-base-dev 2>/dev/null | grep -E 'Candidate:' | grep -qv '(none)'; then
+        BLAS_DEP="libatlas-base-dev"
+    fi
 fi
 
 ## System packages to be installed via apt
@@ -22,10 +33,10 @@ SYSTEM_DEPS=(python3-pip python3-dev curl faad flac gcc git lame mpg123 make \
              python3-numpy python3-setuptools unzip vorbis-tools \
              cython3 pianobar libjpeg-dev libtiff-dev libasound2-dev \
              alsa-utils python-is-python3 python3-mutagen python3-simplejson \
-             python3-pil python3-serial python3-spidev $BLAS_DEP)
+             python3-pil python3-serial python3-spidev ffmpeg $BLAS_DEP)
 
 # Add python3-alsaaudio if available in apt to speed up installation
-if apt-cache show python3-alsaaudio >/dev/null 2>&1; then
+if apt-cache policy python3-alsaaudio 2>/dev/null | grep -E 'Candidate:' | grep -qv '(none)'; then
     SYSTEM_DEPS+=(python3-alsaaudio)
 fi
 
@@ -42,7 +53,4 @@ elif command -v kalipi-config >/dev/null 2>&1; then
     kalipi-config nonint do_gldriver G3 2>/dev/null || true
 fi
 
-# Ensure ffmpeg is installed
-echo -ne "\e[0;31mNOTE:\e[m " >&2
-echo "Installing ffmpeg..."
-$INSTALL_COMMAND ffmpeg
+return 0 2>/dev/null || exit 0
