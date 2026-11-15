@@ -32,8 +32,9 @@ fi
 SYSTEM_DEPS=(python3-pip python3-dev curl faad flac gcc git lame mpg123 make \
              python3-numpy python3-setuptools unzip vorbis-tools \
              cython3 pianobar libjpeg-dev libtiff-dev libasound2-dev \
-             alsa-utils python-is-python3 python3-mutagen python3-simplejson \
-             python3-pil python3-serial python3-spidev ffmpeg $BLAS_DEP)
+             libcrypt-dev alsa-utils python-is-python3 python3-mutagen \
+             python3-simplejson python3-pil python3-serial python3-spidev \
+             ffmpeg $BLAS_DEP)
 
 # Add python3-alsaaudio if available in apt to speed up installation
 if apt-cache policy python3-alsaaudio 2>/dev/null | grep -E 'Candidate:' | grep -qv '(none)'; then

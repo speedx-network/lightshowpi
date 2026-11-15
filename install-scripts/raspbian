@@ -18,8 +18,8 @@ PYTHON_DEPS=(numpy Beautifulsoup4 mutagen simplejson twython emoji \
 ## System packages to be installed
 SYSTEM_DEPS=(python3-pip python3-dev curl faad flac gcc git lame mpg123 make \
              python3-numpy python3-setuptools unzip vorbis-tools \
-             cython3 pianobar libjpeg-dev libtiff-dev libasound2-dev alsa-utils \
-             python-is-python3 ffmpeg $BLAS_DEP)
+             cython3 pianobar libjpeg-dev libtiff-dev libasound2-dev \
+             libcrypt-dev alsa-utils python-is-python3 ffmpeg $BLAS_DEP)
 
 # Add python3-alsaaudio if available in apt
 if apt-cache show python3-alsaaudio >/dev/null 2>&1; then
