@@ -108,7 +108,7 @@ export PIP_BREAK_SYSTEM_PACKAGES=1
 pipinstall() {
     log Installing $1 via pip...
     if [ "$1" == "numpy" ]; then echo -e "\e[1;33mWARNING:\e[m numpy installation may take up to 30 minutes"; fi
-    /usr/bin/yes | pip3 install $PIP_OPTS --upgrade "$1"
+    /usr/bin/yes | pip3 install $PIP_OPTS "$1"
     verify "Installation of Python package '$1' failed"
 }
 
