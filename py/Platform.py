@@ -29,6 +29,17 @@ BEAGLEBONE_BLACK = 2
 MINNOWBOARD = 3
 
 
+def _read_device_tree_model():
+    """Attempt to read the device tree model string (reliable across modern 32-bit and 64-bit kernels)."""
+    for path in ['/proc/device-tree/model', '/sys/firmware/devicetree/base/model']:
+        try:
+            with open(path, 'r') as infile:
+                return infile.read().strip().replace('\x00', '')
+        except (IOError, OSError):
+            continue
+    return None
+
+
 def platform_detect():
     """Detect if running on the Raspberry Pi or Beaglebone Black and return the
     platform type.  Will return RASPBERRY_PI, BEAGLEBONE_BLACK, or UNKNOWN."""
@@ -38,8 +49,6 @@ def platform_detect():
         return RASPBERRY_PI
 
     # Handle Beaglebone Black
-    # TODO: Check the Beaglebone Black /proc/cpuinfo value instead of reading
-    # the platform.
     plat = platform.platform()
     if plat.lower().find('armv7l-with-debian') > -1:
         return BEAGLEBONE_BLACK
@@ -49,7 +58,6 @@ def platform_detect():
         return BEAGLEBONE_BLACK
 
     # Handle Minnowboard
-    # Assumption is that mraa is installed
     try:
         import mraa
 
@@ -65,63 +73,101 @@ def platform_detect():
 def pi_revision():
     """Detect the revision number of a Raspberry Pi, useful for changing
     functionality like default I2C bus based on revision."""
-    # Revision list available at: http://elinux.org/RPi_HardwareHistory#Board_Revision_History
     with open('/proc/cpuinfo', 'r') as infile:
         for line in infile:
-            # Match a line of the form "Revision : 0002" while ignoring extra
-            # info in front of the revision (like 1000 when the Pi was over-volted).
-            match = re.match('Revision\s+:\s+.*(\w{4})$', line, flags=re.IGNORECASE)
+            match = re.match(r'Revision\s+:\s+.*(\w{4})$', line, flags=re.IGNORECASE)
             if match and match.group(1) in ['0000', '0002', '0003']:
-                # Return revision 1 if revision ends with 0000, 0002 or 0003.
                 return 1
             elif match:
-                # Assume revision 2 if revision ends with any other 4 chars.
                 return 2
-        # Couldn't find the revision, throw an exception.
         raise RuntimeError('Could not determine Raspberry Pi revision.')
 
 
 def pi_version():
-    """Detect the version of the Raspberry Pi.  Returns either 1, 2 or
-    None depending on if it's a Raspberry Pi 1 (model A, B, A+, B+),
-    Raspberry Pi 2 (model B+), or not a Raspberry Pi.
+    """Detect the version of the Raspberry Pi.  Returns either 1, 2, 3, 4, 5 or
+    None depending on the Raspberry Pi model, or None if not a Raspberry Pi.
     """
-    # Check /proc/cpuinfo for the Hardware field value.
-    # 2708 is pi 1
-    # 2709 is pi 2
-    # Anything else is not a pi.
-    with open('/proc/cpuinfo', 'r') as infile:
-        cpuinfo = infile.read()
-    # Match a line like 'Hardware   : BCM2709'
-    match = re.search('^Hardware\s+:\s+(\w+)$', cpuinfo,
-                      flags=re.MULTILINE | re.IGNORECASE)
-
-    if not match:
-        # Couldn't find the hardware, assume it isn't a pi.
-        return None
-    if match.group(1) == 'BCM2708':
-        # Pi 1
-        return 1
-    elif match.group(1) == 'BCM2709':
-        # Pi 2
-        return 2
-    elif match.group(1) == 'BCM2711':
-        # Pi 4
-        return 4
-    elif match.group(1) == 'BCM2835':
-        # 4.9+ kernel
-        (type,header) = get_model()
-        if type == 'Pi 2 Model B':
-            return 2
-        if type == 'Pi 3 Model B' or type == 'Pi 3 Model B+' or type == 'Pi 3 Model A+':
-            return 3
-        if type == 'Pi 4 Model B':
+    # First check Linux device tree (works on 32-bit and 64-bit ARM kernels)
+    dt_model = _read_device_tree_model()
+    if dt_model and 'Raspberry Pi' in dt_model:
+        if 'Raspberry Pi 5' in dt_model:
+            return 5
+        elif 'Raspberry Pi 4' in dt_model or 'Raspberry Pi 400' in dt_model or 'Compute Module 4' in dt_model:
             return 4
+        elif 'Raspberry Pi 3' in dt_model or 'Raspberry Pi Zero 2' in dt_model:
+            return 3
+        elif 'Raspberry Pi 2' in dt_model:
+            return 2
         else:
             return 1
-    else:
-        # Something else, not a pi.
+
+    # Check /proc/cpuinfo
+    try:
+        with open('/proc/cpuinfo', 'r') as infile:
+            cpuinfo = infile.read()
+    except (IOError, OSError):
         return None
+
+    # Check for 'Model : Raspberry Pi ...' in cpuinfo
+    model_match = re.search(r'^Model\s*:\s*(.*)$', cpuinfo, flags=re.MULTILINE | re.IGNORECASE)
+    if model_match and 'Raspberry Pi' in model_match.group(1):
+        m = model_match.group(1)
+        if 'Raspberry Pi 5' in m:
+            return 5
+        elif 'Raspberry Pi 4' in m or 'Raspberry Pi 400' in m or 'Compute Module 4' in m:
+            return 4
+        elif 'Raspberry Pi 3' in m or 'Raspberry Pi Zero 2' in m:
+            return 3
+        elif 'Raspberry Pi 2' in m:
+            return 2
+        else:
+            return 1
+
+    # Match Hardware line (legacy 32-bit ARM kernel)
+    match = re.search(r'^Hardware\s+:\s+(\w+)$', cpuinfo, flags=re.MULTILINE | re.IGNORECASE)
+    if match:
+        hw = match.group(1).upper()
+        if hw in ('BCM2708', 'BCM2835'):
+            try:
+                (type, header) = get_model()
+                if 'Pi 2' in type:
+                    return 2
+                elif 'Pi 3' in type:
+                    return 3
+                elif 'Pi 4' in type:
+                    return 4
+                else:
+                    return 1
+            except Exception:
+                return 1
+        elif hw in ('BCM2709', 'BCM2836'):
+            return 2
+        elif hw in ('BCM2710', 'BCM2837'):
+            return 3
+        elif hw in ('BCM2711',):
+            return 4
+        elif hw in ('BCM2712',):
+            return 5
+
+    # Check Revision field as fallback
+    rev_match = re.search(r'^Revision\s*:\s*([0-9a-fA-F]+)$', cpuinfo, flags=re.MULTILINE | re.IGNORECASE)
+    if rev_match:
+        try:
+            (type, _) = get_model()
+            if 'Pi 5' in type:
+                return 5
+            elif 'Pi 4' in type:
+                return 4
+            elif 'Pi 3' in type:
+                return 3
+            elif 'Pi 2' in type:
+                return 2
+            elif 'Pi' in type or 'Model' in type:
+                return 1
+        except Exception:
+            return 1
+
+    return None
 
 
 header40 = """A+, B+ and Pi2 B, and Zero models
@@ -167,40 +213,56 @@ header26 = """A and B models
 
 
 def get_model():
-    with open('/proc/cpuinfo', 'r') as infile:
-        cpuinfo = infile.read()
-    match = re.search('^Revision\s+:\s+\w+(\w{2})$', cpuinfo,
+    dt_model = _read_device_tree_model()
+    if dt_model and 'Raspberry Pi' in dt_model:
+        if 'Model A' in dt_model and 'Plus' not in dt_model and '+' not in dt_model:
+            return dt_model, header26
+        if 'Model B' in dt_model and 'Plus' not in dt_model and '+' not in dt_model and not any(x in dt_model for x in ['Pi 2', 'Pi 3', 'Pi 4', 'Pi 5']):
+            return dt_model, header26
+        return dt_model, header40
+
+    try:
+        with open('/proc/cpuinfo', 'r') as infile:
+            cpuinfo = infile.read()
+    except (IOError, OSError):
+        return "Raspberry Pi (Generic)", header40
+
+    model_match = re.search(r'^Model\s*:\s*(.*)$', cpuinfo, flags=re.MULTILINE | re.IGNORECASE)
+    if model_match and 'Raspberry Pi' in model_match.group(1):
+        m = model_match.group(1).strip()
+        if 'Model A' in m and 'Plus' not in m and '+' not in m:
+            return m, header26
+        if 'Model B' in m and 'Plus' not in m and '+' not in m and not any(x in m for x in ['Pi 2', 'Pi 3', 'Pi 4', 'Pi 5']):
+            return m, header26
+        return m, header40
+
+    match = re.search(r'^Revision\s+:\s+\w*(\w{2})$', cpuinfo,
                       flags=re.MULTILINE | re.IGNORECASE)
-    model = match.group(1)
-    
+    if not match:
+        return "Raspberry Pi (Generic)", header40
+
+    model = match.group(1).lower()
+
     if model in ["07", "08", "09"]:
         return "Model A", header26
-    
     elif model in ["02", "03", "04", "05", "06", "0d", "0e", "0f"]:
         return "Model B", header26
-    
     elif model in ["12", "15"]:
         return "Model A+", header40
-    
     elif model in ["10", "13"]:
         return "Model B+", header40
-    
     elif model in ["40", "41", "42"]:
         return "Pi 2 Model B", header40
-    
     elif model in ["82", "83"]:
         return "Pi 3 Model B", header40
-    
     elif model in ["d3"]:
         return "Pi 3 Model B+", header40
-
     elif model in ["e0"]:
         return "Pi 3 Model A+", header40
-    
     elif model in ["11", "14"]:
         return "Pi 4 Model B", header40
-    
     elif model in ["92", "93", "c1", "20"]:
         return "Pi Zero", header40
-    
-    raise RuntimeError('Could not determine Raspberry Pi model.')    
+
+    return "Raspberry Pi (Generic)", header40
+

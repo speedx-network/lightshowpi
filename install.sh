@@ -2,7 +2,7 @@
 #
 # Installation framework for lightshowPi
 #
-# Support for each individual distribution is 
+# Support for each individual distribution is in install-scripts/
 INSTALL_DIR="$( cd $(dirname $0) ; pwd -P )"
 BUILD_DIR=${INSTALL_DIR}/build_dir
 
@@ -54,26 +54,34 @@ verify() {
 #
 # Configure installation process based on Linux distribution
 install_init() {
-    DISTRO=`awk -F= '$1~/^ID$/ {print $2}' /etc/os-release`
-    BASE_DISTRO=`awk -F= '$1=/ID_LIKE/ {print $2}' /etc/os-release`
-
-    all_supported="ls "
+    DISTRO=$(awk -F= '$1~/^ID$/ {print $2}' /etc/os-release | tr -d '"')
+    BASE_DISTRO=$(awk -F= '$1~/^ID_LIKE$/ {print $2}' /etc/os-release | tr -d '"')
 
     case $DISTRO in
-        archarm|raspbian)
+        archarm|raspbian|kali|debian|ubuntu)
             log Configuring installation for detected distro="'$DISTRO'"
-            source $INSTALL_DIR/install-scripts/$DISTRO
-            verify "Error importing configuration from install-scripts/$DISTRO"
+            if [ -f "$INSTALL_DIR/install-scripts/$DISTRO" ]; then
+                source "$INSTALL_DIR/install-scripts/$DISTRO"
+            elif [ -f "$INSTALL_DIR/install-scripts/kali" ]; then
+                source "$INSTALL_DIR/install-scripts/kali"
+            else
+                source "$INSTALL_DIR/install-scripts/raspbian"
+            fi
+            verify "Error importing configuration from install-scripts"
             ;;
         *)
-            log Detected unknown distribution. Please verify that "'$DISTRO'" is supported and update this script.
-            log To add support for "'$DISTRO'" create a script with that name in "install-scripts"
-            exit 1
+            if echo "$BASE_DISTRO" | grep -qi "debian"; then
+                log "Distro '$DISTRO' is Debian-based. Using Kali/Debian configuration."
+                source "$INSTALL_DIR/install-scripts/kali"
+                verify "Error importing configuration from install-scripts/kali"
+            else
+                log Detected unknown distribution. Please verify that "'$DISTRO'" is supported and update this script.
+                log To add support for "'$DISTRO'" create a script with that name in "install-scripts"
+                exit 1
+            fi
             ;;
     esac
-
 }
-
 
 #
 # Wrapper function to handle installation of system packages
@@ -85,14 +93,21 @@ pkginstall() {
     verify "Installation of package '$1' failed"
 }
 
+# Pip options for PEP 668 environments (modern Debian, Kali, Ubuntu)
+PIP_OPTS=""
+if pip3 install --help 2>&1 | grep -q -- '--break-system-packages'; then
+    PIP_OPTS="--break-system-packages"
+fi
+export PIP_BREAK_SYSTEM_PACKAGES=1
+
 #
 # Wrapper function to handle installation of Python packages
 # Args:
 #     1 - Package name
 pipinstall() {
     log Installing $1 via pip...
-    if [ $1 == "numpy" ]; then echo -e "\e[1;33mWARNING:\e[m numpy installation may take up to 30 minutes"; fi
-    /usr/bin/yes | pip3 install --upgrade $1
+    if [ "$1" == "numpy" ]; then echo -e "\e[1;33mWARNING:\e[m numpy installation may take up to 30 minutes"; fi
+    /usr/bin/yes | pip3 install $PIP_OPTS --upgrade "$1"
     verify "Installation of Python package '$1' failed"
 }
 
@@ -107,52 +122,71 @@ for _dep in ${SYSTEM_DEPS[@]}; do
     pkginstall $_dep;
 done
 
-# make sure opt/vc is installed - dep subversion
-log Attempt to install opt/vc failure is not a concern
-svn export https://github.com/raspberrypi/firmware/trunk/opt/vc /opt/vc
+# make sure opt/vc exists (only needed on older Pi firmware, failure is not critical)
+if [ ! -d /opt/vc ]; then
+    log "Checking /opt/vc (optional, failure is not a concern)..."
+    mkdir -p /opt/vc
+fi
 
-# wiringpi apt-get not available on Deb 11+
-log Install deb package manually for wiringPi
-cd /tmp
-wget https://project-downloads.drogon.net/wiringpi-latest.deb
-/usr/bin/yes | dpkg -i wiringpi-latest.deb
-cd $BUILD_DIR
+# WiringPi: drogon.net is deprecated; install from official community repository if not installed
+if ! command -v gpio >/dev/null 2>&1; then
+    log "Installing WiringPi from community repository..."
+    cd /tmp
+    rm -rf WiringPi
+    if git clone --depth 1 https://github.com/WiringPi/WiringPi.git; then
+        cd WiringPi
+        ./build
+        ldconfig 2>/dev/null || true
+    else
+        log "Warning: Failed to clone WiringPi repository."
+    fi
+    cd "$BUILD_DIR"
+else
+    log "WiringPi (gpio) is already installed."
+fi
 
 # Some symlinks that will make life a little easier
-# Note that this may (intentionally) clobber Python 3 symlinks in newer OS's
-mv /usr/bin/python /usr/bin/python2
-mv /usr/bin/pip /usr/bin/pip2
-ln -fs `which python3` /usr/bin/python
-ln -fs `which pip3` /usr/bin/pip
+if [ -f /usr/bin/python ] && [ ! -L /usr/bin/python ] && [ "$(readlink -f /usr/bin/python 2>/dev/null)" != "$(which python3 2>/dev/null)" ]; then
+    mv /usr/bin/python /usr/bin/python2 2>/dev/null || true
+fi
+if [ -f /usr/bin/pip ] && [ ! -L /usr/bin/pip ] && [ "$(readlink -f /usr/bin/pip 2>/dev/null)" != "$(which pip3 2>/dev/null)" ]; then
+    mv /usr/bin/pip /usr/bin/pip2 2>/dev/null || true
+fi
+if command -v python3 >/dev/null 2>&1; then
+    ln -fs "$(which python3)" /usr/bin/python
+fi
+if command -v pip3 >/dev/null 2>&1; then
+    ln -fs "$(which pip3)" /usr/bin/pip
+fi
 
 # Install decoder
 log Installing decoder...
-pip3 install --upgrade git+https://broken2048@bitbucket.org/broken2048/decoder-v3.py.git
+pip3 install $PIP_OPTS --upgrade git+https://bitbucket.org/broken2048/decoder-v3.py.git
 verify "Installation of decoder-1.5XB-Unix failed"
 
 # Install Python dependencies
 log Preparing to install ${#PYTHON_DEPS[@]} python packages on your system...
-for _dep in ${PYTHON_DEPS[@]}; do
-    pipinstall $_dep;
+for _dep in "${PYTHON_DEPS[@]}"; do
+    pipinstall "$_dep";
 done
 
 log Installing rpi-audio-levels...
-pip3 install git+https://broken2048@bitbucket.org/broken2048/rpi-audio-levels.git
+pip3 install $PIP_OPTS git+https://bitbucket.org/broken2048/rpi-audio-levels.git
 verify "Installation of rpi-audio-levels failed"
 
 # Install pygooglevoice
 log Installing pygooglevoice...
-pip3 install --upgrade git+https://github.com/pettazz/pygooglevoice.git
+pip3 install $PIP_OPTS --upgrade git+https://github.com/pettazz/pygooglevoice.git
 verify "Installation of pygooglevoice failed"
 
 # Install wiringpipy
 log Installing wiringpipy...
-pip3 install --upgrade git+https://broken2048@bitbucket.org/broken2048/wiringpipy.git
+pip3 install $PIP_OPTS --upgrade git+https://bitbucket.org/broken2048/wiringpipy.git
 verify "Installation of wiringpipy failed"
 
 # Optionally add a line to /etc/sudoers
 if [ -f /etc/sudoers ]; then
-    KEEP_EN="Defaults             env_keep="SYNCHRONIZED_LIGHTS_HOME""
+    KEEP_EN="Defaults             env_keep=\"SYNCHRONIZED_LIGHTS_HOME\""
     grep -q "$KEEP_EN" /etc/sudoers
     if [ $? -ne 0 ]; then
         echo "$KEEP_EN" >> /etc/sudoers
