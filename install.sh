@@ -15,21 +15,22 @@ INSTALL_COMMAND=
 PYTHON_DEPS=
 SYSTEM_DEPS=
 
-# Set up file-based logging
-exec 1> >(tee install.log)
-
-# Root check
+# Root check - must be performed before any I/O redirection so sudo has direct terminal control
 if [ "$EUID" -ne 0 ]; then
     echo 'Install script requires root privileges!'
-    if [ -x /usr/bin/sudo ]; then
+    if command -v sudo >/dev/null 2>&1; then
         echo 'Switching now, enter the password for "'$USER'", if prompted.'
-        sudo su -c "$0 $*"
+        exec sudo bash "$0" "$@"
     else
         echo 'Switching now, enter the password for "root"!'
-        su root -c "$0 $*"
+        exec su root -c "bash \"$0\" $*"
     fi
     exit $?
 fi
+
+# Set up file-based logging (only after root privileges are acquired)
+LOG_FILE="${INSTALL_DIR}/install.log"
+exec 1> >(tee -a "$LOG_FILE")
 
 #
 # Wrapper for informational logging
